@@ -2,9 +2,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras import layers, models
 from tensorflow.keras.models import load_model
+from tensorflow.python.keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
+import os
 
 signal_length = 512
 t = np.linspace(0, 1, signal_length)
+
+MODEL_FILENAME = "denoising_autoencoder.keras"
+BEST_WEIGHTS_FILENAME = "best.weights.h5"
+
+# Назви файлів для даних
+X_TRAIN_FILENAME = "X_train.npy"
+Y_TRAIN_FILENAME = "Y_train.npy"
+X_VAL_FILENAME = "X_val.npy"
+Y_VAL_FILENAME = "Y_val.npy"
+X_TEST_FILENAME = "X_test.npy"
+Y_TEST_FILENAME = "Y_test.npy"
+
+ALL_DATA_FILENAMES = [
+    X_TRAIN_FILENAME, Y_TRAIN_FILENAME,
+    X_VAL_FILENAME, Y_VAL_FILENAME,
+    X_TEST_FILENAME, Y_TEST_FILENAME
+]
 
 
 def generate_periodic_signal(signal_type, freq, amp, D, phase):
@@ -25,7 +44,7 @@ def generate_periodic_signal(signal_type, freq, amp, D, phase):
 def generate_poliharmonic_signal(n_components):
     signal = np.zeros(signal_length)
     for _ in range(n_components):
-        freq = np.random.uniform(5, 10)
+        freq = np.random.uniform(1, 10)
         phase = np.random.uniform(0, 2 * np.pi)
         amp = np.random.uniform(0.5, 1.5)
         D = 0
@@ -34,7 +53,7 @@ def generate_poliharmonic_signal(n_components):
 
 
 def generate_aperiodic_signal():
-    freq = np.random.uniform(2, 10)
+    freq = np.random.uniform(1, 10)
     damping_factor = np.exp(-t * np.random.uniform(1, 4))
     return np.sin(2 * np.pi * freq * t + np.random.uniform(0, 2*np.pi)) * damping_factor
 
@@ -43,8 +62,8 @@ def add_noise(signal, noise_type):
     if noise_type == "white":
         noise = np.random.uniform(-0.5, 0.5, signal_length)
     elif noise_type == "harmonic":
-        freq = np.random.uniform(20, 30)
-        noise = np.sin(2 * np.pi * freq * t) / 3
+        freq = np.random.uniform(15, 30)
+        noise = np.sin(2 * np.pi * freq * t)
     elif noise_type == "impulse":
         noise = np.zeros(signal_length)
         num_peaks = np.random.randint(5, 11)
@@ -53,7 +72,7 @@ def add_noise(signal, noise_type):
     elif noise_type == "mixed":
         types = ["white", "harmonic", "impulse"]
         noise = sum(add_noise(np.zeros_like(signal), nt) - np.zeros_like(signal) for nt in
-                    np.random.choice(types, 2, replace=False)) / 1.5
+                    np.random.choice(types, 2, replace=False))
     else:
         raise ValueError("Unknown noise type")
 
@@ -81,6 +100,7 @@ def generate_dataset(n_samples=30000):
     X_clean, X_noisy = [], []
     for _ in range(n_samples):
         sig_type = np.random.choice(list(signal_generators.keys()))
+
         noise_type = np.random.choice(noise_types)
 
         clean = signal_generators[sig_type]()
@@ -95,14 +115,7 @@ def generate_dataset(n_samples=30000):
     return X_noisy, X_clean
 
 
-# Генерування даних
-X_noisy, X_clean = generate_dataset()
-X_train, X_val, X_test = X_noisy[:24000], X_noisy[24000:27000], X_noisy[27000:]
-Y_train, Y_val, Y_test = X_clean[:24000], X_clean[24000:27000], X_clean[27000:]
-
-print(len(X_val))
-
-# Створення моделі
+# Створення мережі
 def build_conv_autoencoder(input_shape):
     inputs = layers.Input(shape=input_shape)
 
@@ -124,33 +137,69 @@ def build_conv_autoencoder(input_shape):
     return model
 
 
-autoencoder = build_conv_autoencoder(X_train.shape[1:])
+# Завантажуємо або генеруємо дані
+if all(os.path.exists(f) for f in ALL_DATA_FILENAMES):
+    X_train = np.load(X_TRAIN_FILENAME)
+    Y_train = np.load(Y_TRAIN_FILENAME)
+    X_val = np.load(X_VAL_FILENAME)
+    Y_val = np.load(Y_VAL_FILENAME)
+    X_test = np.load(X_TEST_FILENAME)
+    Y_test = np.load(Y_TEST_FILENAME)
+else:
+    X_noisy, X_clean = generate_dataset()
+    X_train, X_val, X_test = X_noisy[:24000], X_noisy[24000:27000], X_noisy[27000:]
+    Y_train, Y_val, Y_test = X_clean[:24000], X_clean[24000:27000], X_clean[27000:]
 
-# Навчання
-history = autoencoder.fit(
-    X_train, Y_train,
-    validation_data=(X_val, Y_val),
-    epochs=30,
-    batch_size=64,
-)
+    np.save(X_TRAIN_FILENAME, X_train)
+    np.save(Y_TRAIN_FILENAME, Y_train)
+    np.save(X_VAL_FILENAME, X_val)
+    np.save(Y_VAL_FILENAME, Y_val)
+    np.save(X_TEST_FILENAME, X_test)
+    np.save(Y_TEST_FILENAME, Y_test)
 
-# ========== 4. Графік втрат ==========
-plt.figure(figsize=(8, 4))
+history = None
 
-epochs = range(1, len(history.history['loss']) + 1)  # Нумерація епох від 1
+# Завантажуємо або створюємо та навчаємо мережу
+if os.path.exists(MODEL_FILENAME):
+    autoencoder = load_model(MODEL_FILENAME)
+else:
+    autoencoder = build_conv_autoencoder(X_train.shape[1:])
 
-plt.plot(epochs, history.history['loss'], label='Похибка на навчальній вибірці')
-plt.plot(epochs, history.history['val_loss'], label='Похибка на валідаційній вибірці')
+    # Стежимо за похибкою на валідаційній вибірці і зберігаємо лише найкращу мережу
+    checkpoint_callback = ModelCheckpoint(
+        filepath="best.weights.h5",  # Куди зберігати
+        monitor="val_loss",
+        save_best_only=True,
+        save_weights_only=True,
+        mode="min"
+    )
 
-plt.xlabel('Епоха')
-plt.ylabel('MSE')
-plt.legend()
-plt.title('Динаміка похибок під час навчання')
-plt.tight_layout()
-plt.show()
+    # Навчання
+    history = autoencoder.fit(
+        X_train, Y_train,
+        validation_data=(X_val, Y_val),
+        epochs=30,
+        batch_size=64,
+        callbacks=[checkpoint_callback,
+                   ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, verbose=1)]
+    )
 
+    # Завантажуємо найкращі ваги і зберігаємо мережу у файлі
+    autoencoder.load_weights(BEST_WEIGHTS_FILENAME)
+    autoencoder.save(MODEL_FILENAME)
 
-#autoencoder = load_model("denoising_autoencoder.keras")
+# Графік похибок
+if history is not None:
+    plt.figure(figsize=(8, 4))
+    epochs_range = range(1, len(history.history['loss']) + 1) # Нумерація епох від 1
+    plt.plot(epochs_range, history.history['loss'], label='Похибка на навчальній вибірці')
+    plt.plot(epochs_range, history.history['val_loss'], label='Похибка на валідаційній вибірці')
+    plt.xlabel('Епоха')
+    plt.ylabel('MSE')
+    plt.legend()
+    plt.title('Динаміка похибок під час навчання')
+    plt.tight_layout()
+    plt.show()
 
 
 def compute_snr(clean, test):
@@ -209,8 +258,5 @@ for _ in range(num_pictures):
         ax.grid(True)
 
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.42)  # hspace — відстань між рядками (vertical space)
+    plt.subplots_adjust(hspace=0.42)
     plt.show()
-
-# Збереження моделі
-autoencoder.save("denoising_autoencoder.keras")
