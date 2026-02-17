@@ -1,0 +1,28 @@
+# 1D Signal Denoising using a Convolutional Autoencoder
+
+## Project Overview
+This project focuses on the development of a universal digital signal filter based on a neural network architecture, specifically a convolutional denoising autoencoder. The main objective is to reconstruct clean one-dimensional signals from its distorted versions. Due to its ability to extract meaningful features while preserving spatial structure, the convolutional autoencoder is especially suitable for signal denoising tasks.
+
+## Key Features
+* Architecture: 1D Convolutional Autoencoder built with TensorFlow/Keras.
+* Signal Processing: Support for various signal types and noise models.
+* Visualization: Comparative analysis of original, noisy, and reconstructed signals using Matplotlib.
+
+## 🛠 Tech Stack
+* Language: Python
+* Deep Learning: TensorFlow, Keras
+* Scientific Computing: NumPy
+* Visualization: Matplotlib
+
+## Architecture
+The model utilizes a bottleneck architecture to learn a compressed representation of the signal, effectively learning to ignore the noise components.
+* Encoder: Series of Conv1D and MaxPooling1D layers to extract spatial features.
+* Decoder: Conv1D and UpSampling1D layers to reconstruct the signal to its original dimensions.
+
+## Results
+The model successfully reduces noise while preserving the essential features of the 1D waveform.
+
+## Prerequisites
+* Python 3.8+
+* TensorFlow 2.x
+* NumPy, Matplotlib
